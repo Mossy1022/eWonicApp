@@ -115,7 +115,9 @@ class TranslationViewModel: ObservableObject {
         sttService.partialResultSubject
             .receive(on: DispatchQueue.main)
             .sink { [weak self] partialText in
-                self?.myTranscribedText = "Listening: \(partialText)..."
+                guard let self = self else { return }
+                self.myTranscribedText = "Listening: \(partialText)..."
+                self.sendTextToPeer(originalText: partialText, isFinal: false)
             }
             .store(in: &cancellables)
 
@@ -133,7 +135,7 @@ class TranslationViewModel: ObservableObject {
             }, receiveValue: { [weak self] finalText in
                 guard let self = self else { return }
                 self.myTranscribedText = "You said: \(finalText)"
-                self.sendTextToPeer(originalText: finalText)
+                self.sendTextToPeer(originalText: finalText, isFinal: true)
             })
             .store(in: &cancellables)
         
@@ -191,7 +193,7 @@ class TranslationViewModel: ObservableObject {
     }
 
     // User A: Sends their transcribed text to User B
-    private func sendTextToPeer(originalText: String) {
+    private func sendTextToPeer(originalText: String, isFinal: Bool) {
       guard !originalText.isEmpty else {
         print("⚠️ sendTextToPeer: originalText is empty, skipping send")
         myTranscribedText = "Nothing to send."
@@ -208,7 +210,8 @@ class TranslationViewModel: ObservableObject {
         id: UUID(),
         originalText: originalText,
         sourceLanguageCode: myLanguage,
-        targetLanguageCode: peerLanguage
+        targetLanguageCode: peerLanguage,
+        isFinal: isFinal
       )
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -222,35 +225,37 @@ class TranslationViewModel: ObservableObject {
       print("📨 handleReceivedMessage triggered")
       print("   ID: \(message.id)")
       print("   From: \(message.sourceLanguageCode) → \(message.targetLanguageCode)")
-      print("   Text: '\(message.originalText)'")
+      print("   Text: '\(message.originalText)' final? \(message.isFinal)")
 
       DispatchQueue.main.async {
-        self.isProcessing = true
+        if message.isFinal { self.isProcessing = true }
         self.myTranscribedText = ""
         self.peerSaidText = "Peer (\(message.sourceLanguageCode)): \(message.originalText)"
         self.translatedTextForMeToHear = "Translating..."
       }
 
-        Task {
-          do {
-            let (translated, engine) = try await UnifiedTranslateService.translate(
-                  message.originalText,
-                  from: message.sourceLanguageCode,
-                  to:   message.targetLanguageCode)
+      Task {
+        do {
+          let (translated, engine) = try await UnifiedTranslateService.translate(
+                message.originalText,
+                from: message.sourceLanguageCode,
+                to:   message.targetLanguageCode)
 
-            print("✅ \(engine) translated: '\(translated)'")
-            await MainActor.run {
-              self.translatedTextForMeToHear = "You hear: \(translated)"
+          print("✅ \(engine) translated: '\(translated)'")
+          await MainActor.run {
+            self.translatedTextForMeToHear = "You hear: \(translated)"
+            if message.isFinal {
               self.synthesizeAndPlay(text: translated,
                                      languageCode: message.targetLanguageCode)
             }
-          } catch {
-            await MainActor.run {
-              self.translatedTextForMeToHear = "Local translation unavailable."
-              self.isProcessing = false
-            }
+          }
+        } catch {
+          await MainActor.run {
+            self.translatedTextForMeToHear = "Local translation unavailable."
+            self.isProcessing = false
           }
         }
+      }
     }
 
     // User B: Synthesizes and plays the translated text (in their own language)
