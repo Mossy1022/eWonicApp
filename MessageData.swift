@@ -13,4 +13,5 @@ struct MessageData: Codable {
     let sourceLanguageCode: String // e.g., "en-US" (BCP-47)
     let targetLanguageCode: String // e.g., "es-ES" (BCP-47)
     let isFinal: Bool            // true if final transcript
+    let timestamp: TimeInterval
 }

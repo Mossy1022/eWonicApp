@@ -56,6 +56,7 @@ class TranslationViewModel: ObservableObject {
     @Published var ttsService = AppleTTSService()
     private var translateService = GoogleTranslateService()
     private var cancellables = Set<AnyCancellable>()
+    private var lastReceivedTimestamp: TimeInterval = 0
 
     @Published var myTranscribedText: String = "Tap 'Start Listening' to speak."
     @Published var peerSaidText: String = "" // What the peer said in their original language
@@ -211,7 +212,8 @@ class TranslationViewModel: ObservableObject {
         originalText: originalText,
         sourceLanguageCode: myLanguage,
         targetLanguageCode: peerLanguage,
-        isFinal: isFinal
+        isFinal: isFinal,
+        timestamp: Date().timeIntervalSince1970
       )
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -227,6 +229,9 @@ class TranslationViewModel: ObservableObject {
       print("   From: \(message.sourceLanguageCode) → \(message.targetLanguageCode)")
       print("   Text: '\(message.originalText)' final? \(message.isFinal)")
 
+      guard message.timestamp > self.lastReceivedTimestamp else { return }
+      self.lastReceivedTimestamp = message.timestamp
+
       DispatchQueue.main.async {
         if message.isFinal { self.isProcessing = true }
         self.myTranscribedText = ""
@@ -236,12 +241,12 @@ class TranslationViewModel: ObservableObject {
 
       Task {
         do {
-          let (translated, engine) = try await UnifiedTranslateService.translate(
+          let translated = try await UnifiedTranslateService.translate(
                 message.originalText,
                 from: message.sourceLanguageCode,
                 to:   message.targetLanguageCode)
 
-          print("✅ \(engine) translated: '\(translated)'")
+          print("✅ translated: '\(translated)'")
           await MainActor.run {
             self.translatedTextForMeToHear = "You hear: \(translated)"
             if message.isFinal {
