@@ -41,6 +41,13 @@ final class NativeSTTService: NSObject, ObservableObject {
   private var recognitionTask: SFSpeechRecognitionTask?
   private let audioEngine = AVAudioEngine()
 
+  private var segmentStart = Date()
+  private let maxSegmentSeconds: TimeInterval = 120
+  private var lastBufferHostTime: UInt64 = 0
+  private let vadPause: TimeInterval = 0.4
+  private let sentenceRegex = try! NSRegularExpression(pattern:"[.!?]$")
+  private var watchdogTimer: DispatchSourceTimer?
+
   // MARK: – State exposed to SwiftUI
   @Published private(set) var isListening = false
   @Published var recognizedText: String = ""
@@ -94,20 +101,20 @@ final class NativeSTTService: NSObject, ObservableObject {
     // Cancel any prior task
     recognitionTask?.cancel(); recognitionTask = nil
 
-    do {
-      let sess = AVAudioSession.sharedInstance()
-      try sess.setCategory(.record, mode: .measurement, options: .duckOthers)
-      try sess.setActive(true, options: .notifyOthersOnDeactivation)
-    } catch {
-      finalResultSubject.send(completion: .failure(.recognitionError(error)))
-      return
-    }
+    AudioSessionManager.shared.begin()
 
     // Build request & task ----------------------------------------------------------
     recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
     guard let req = recognitionRequest else { fatalError("Could not create SFSpeechAudioBufferRecognitionRequest") }
     req.shouldReportPartialResults = true
     if recognizer.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
+
+    segmentStart = Date()
+    watchdogTimer?.cancel()
+    watchdogTimer = DispatchSource.makeTimerSource()
+    watchdogTimer?.schedule(deadline:.now()+55*60)
+    watchdogTimer?.setEventHandler { [weak self] in self?.rotateTask() }
+    watchdogTimer?.resume()
 
     recognitionTask = recognizer.recognitionTask(with: req) { [weak self] result, err in
       guard let self = self else { return }
@@ -119,6 +126,10 @@ final class NativeSTTService: NSObject, ObservableObject {
         self.partialResultSubject.send(text)
         isFinal = r.isFinal
         print("[NativeSTT] partial – \(text)")
+
+        if Date().timeIntervalSince(self.segmentStart) > self.maxSegmentSeconds {
+          DispatchQueue.main.async { self.rotateTask() }
+        }
       }
 
       // Terminal path (either error or final)
@@ -156,8 +167,22 @@ final class NativeSTTService: NSObject, ObservableObject {
       return
     }
 
-    node.installTap(onBus: 0, bufferSize: 1024, format: format) { buf, _ in
+    node.installTap(onBus: 0, bufferSize: 1024, format: format) { buf, when in
       self.recognitionRequest?.append(buf)
+
+      if self.lastBufferHostTime != 0 {
+        let current = AVAudioTime.seconds(forHostTime: when.hostTime)
+        let last    = AVAudioTime.seconds(forHostTime: self.lastBufferHostTime)
+        let delta   = current - last
+        if delta >= self.vadPause {
+          let text = self.recognizedText
+          let range = NSRange(location: max(text.count - 1, 0), length: text.isEmpty ? 0 : 1)
+          if self.sentenceRegex.firstMatch(in: text, options: [], range: range) != nil {
+            DispatchQueue.main.async { self.rotateTask() }
+          }
+        }
+      }
+      self.lastBufferHostTime = when.hostTime
     }
 
     audioEngine.prepare()
@@ -186,12 +211,64 @@ final class NativeSTTService: NSObject, ObservableObject {
     guard isListening else { return }
     DispatchQueue.main.async { self.isListening = false }
 
+    watchdogTimer?.cancel()
+
+    AudioSessionManager.shared.end()
+
     audioEngine.stop()
     audioEngine.inputNode.removeTap(onBus: 0)
 
     recognitionRequest?.endAudio(); recognitionRequest = nil
     recognitionTask?.cancel();        recognitionTask  = nil
     print("[NativeSTT] stopped")
+  }
+
+  func rotateTask() {
+    recognitionRequest?.endAudio(); recognitionRequest = nil
+    recognitionTask?.cancel();        recognitionTask  = nil
+
+    guard isListening, let recognizer = speechRecognizer else { return }
+
+    recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+    guard let req = recognitionRequest else { return }
+    req.shouldReportPartialResults = true
+    if recognizer.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
+
+    recognitionTask = recognizer.recognitionTask(with: req) { [weak self] result, err in
+      guard let self = self else { return }
+      var isFinal = false
+
+      if let r = result {
+        let text = r.bestTranscription.formattedString
+        self.recognizedText = text
+        self.partialResultSubject.send(text)
+        isFinal = r.isFinal
+        print("[NativeSTT] partial – \(text)")
+      }
+
+      if err != nil || isFinal {
+        self.stopTranscribing()
+
+        if let e = err as NSError? {
+          if e.domain == "kAFAssistantErrorDomain" && e.code == self.noSpeechDetectedCode {
+            self.finalResultSubject.send(completion: .failure(.noAudioInput))
+          } else {
+            self.finalResultSubject.send(completion: .failure(.recognitionError(e)))
+          }
+          return
+        }
+
+        if !self.recognizedText.isEmpty {
+          self.finalResultSubject.send(self.recognizedText)
+          self.finalResultSubject.send(completion: .finished)
+        } else {
+          self.finalResultSubject.send(completion: .failure(.noAudioInput))
+        }
+      }
+    }
+
+    segmentStart = Date()
+    lastBufferHostTime = 0
   }
 }
 
