@@ -54,7 +54,6 @@ class TranslationViewModel: ObservableObject {
     @Published var multipeerSession = MultipeerSession()
     @Published var sttService = NativeSTTService()
     @Published var ttsService = AppleTTSService()
-    private var translateService = GoogleTranslateService()
     private var cancellables = Set<AnyCancellable>()
     private var lastReceivedTimestamp: TimeInterval = 0
 
@@ -87,7 +86,7 @@ class TranslationViewModel: ObservableObject {
         Language(name: "German (Germany)", code: "de-DE"),
         Language(name: "Japanese (Japan)", code: "ja-JP"),
         Language(name: "Chinese (Mandarin, Simplified)", code: "zh-CN"),
-        // Add more supported by SFSpeechRecognizer & Google Translate
+        // Add more languages supported by SFSpeechRecognizer & Apple Translate
     ]
 
     init() {
@@ -233,11 +232,17 @@ class TranslationViewModel: ObservableObject {
       self.lastReceivedTimestamp = message.timestamp
 
       DispatchQueue.main.async {
-        if message.isFinal { self.isProcessing = true }
-        self.myTranscribedText = ""
         self.peerSaidText = "Peer (\(message.sourceLanguageCode)): \(message.originalText)"
-        self.translatedTextForMeToHear = "Translating..."
+        if message.isFinal {
+          self.isProcessing = true
+          self.translatedTextForMeToHear = "Translating..."
+        } else {
+          self.translatedTextForMeToHear = ""
+        }
+        self.myTranscribedText = ""
       }
+
+      guard message.isFinal else { return }
 
       Task {
         do {
