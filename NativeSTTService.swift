@@ -10,24 +10,6 @@ import AVFoundation
 import Speech
 import Combine
 
-// MARK: – Speech‑to‑Text error envelope used by the rest of the app
-enum STTError: Error, LocalizedError {
-  case unavailable
-  case permissionDenied
-  case recognitionError(Error)
-  case taskError(String)
-  case noAudioInput
-
-  var errorDescription: String? {
-    switch self {
-    case .unavailable:          return "Speech recognition is not available on this device or for the selected language."
-    case .permissionDenied:     return "Speech recognition permission was denied."
-    case .recognitionError(let e): return "Recognition failed: \(e.localizedDescription)"
-    case .taskError(let msg):   return msg
-    case .noAudioInput:         return "No audio input was detected or the input was too quiet."
-    }
-  }
-}
 
 /// Manages the AVAudioEngine + SFSpeechRecognizer pipeline and publishes
 /// partial / final results via Combine.
@@ -137,11 +119,12 @@ final class NativeSTTService: NSObject, ObservableObject {
         self.stopTranscribing()
 
           if let e = err as NSError? {
-            print("[NativeSTT] error – domain: \(e.domain) code: \(e.code)")
+            let wrapped = STTError.recognitionError(e)
+            print("[NativeSTT] error – \(wrapped.debugDescription)")
             if e.domain == "kAFAssistantErrorDomain" && e.code == self.noSpeechDetectedCode {
               self.finalResultSubject.send(completion: .failure(.noAudioInput))
             } else {
-              self.finalResultSubject.send(completion: .failure(.recognitionError(e)))
+              self.finalResultSubject.send(completion: .failure(wrapped))
             }
             return
           }
