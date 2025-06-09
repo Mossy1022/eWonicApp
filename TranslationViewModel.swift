@@ -11,44 +11,6 @@ import Speech // For SFSpeechRecognizerAuthorizationStatus
 
 class TranslationViewModel: ObservableObject {
     
-    enum STTError: Error, LocalizedError, Equatable {
-      case unavailable
-      case permissionDenied
-      case recognitionError(Error)
-      case taskError(String)
-      case noAudioInput
-
-      var errorDescription: String? {
-        switch self {
-        case .unavailable:
-          return "Speech recognition is not available on this device or for the selected language."
-        case .permissionDenied:
-          return "Speech recognition permission was denied."
-        case .recognitionError(let e):
-          return "Recognition failed: \(e.localizedDescription)"
-        case .taskError(let msg):
-          return msg
-        case .noAudioInput:
-          return "No audio input was detected or the input was too quiet."
-        }
-      }
-
-      static func == (lhs: STTError, rhs: STTError) -> Bool {
-        switch (lhs, rhs) {
-        case (.unavailable, .unavailable),
-             (.permissionDenied, .permissionDenied),
-             (.noAudioInput, .noAudioInput):
-          return true
-        case (.taskError(let lMsg), .taskError(let rMsg)):
-          return lMsg == rMsg
-        case (.recognitionError, .recognitionError):
-          // Since Error doesn't conform to Equatable, we consider all recognitionErrors as equal
-          return true
-        default:
-          return false
-        }
-      }
-    }
 
     
     @Published var multipeerSession = MultipeerSession()
@@ -128,8 +90,9 @@ class TranslationViewModel: ObservableObject {
                 guard let self = self else { return }
                 self.isProcessing = false // STT part is done or failed
                 if case .failure(let error) = completion {
+                    print("[STT DEBUG] \(error.debugDescription)")
                     self.myTranscribedText = "STT Error: \(error.localizedDescription)"
-                    if error as? STTError == .noAudioInput {
+                    if error == .noAudioInput {
                         self.myTranscribedText = "Didn't hear that. Try again."
                     }
                 }
