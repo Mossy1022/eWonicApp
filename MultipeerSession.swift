@@ -13,6 +13,8 @@ final class MultipeerSession: NSObject, ObservableObject {
   @Published private(set) var isAdvertising = false
   @Published private(set) var isBrowsing    = false
   @Published var receivedMessage: MessageData?
+  // Emits human readable error descriptions
+  let errorSubject = PassthroughSubject<String,Never>()
 
   // MARK: – MC plumbing
   private let myPeerID = MCPeerID(displayName: UIDevice.current.name)
@@ -82,6 +84,7 @@ final class MultipeerSession: NSObject, ObservableObject {
   func send(message: MessageData) {
     guard !session.connectedPeers.isEmpty else {
       print("⚠️ No connected peers – message not sent")
+      errorSubject.send("No connected peers – message not sent")
       return
     }
 
@@ -96,6 +99,7 @@ final class MultipeerSession: NSObject, ObservableObject {
       print("📤 Sent \(compressed.count) bytes → \(session.connectedPeers.map { $0.displayName })")
     } catch {
       print("❌ session.send error: \(error.localizedDescription)")
+      errorSubject.send("Send failed: \(error.localizedDescription)")
     }
   }
 
@@ -125,6 +129,9 @@ extension MultipeerSession: MCSessionDelegate {
       case .notConnected:
         self.connectedPeers.removeAll { $0 == peerID }
         print("[Multipeer] \(peerID.displayName) DISCONNECTED")
+        if s.connectedPeers.isEmpty {
+          self.errorSubject.send("Connection to \(peerID.displayName) lost")
+        }
       @unknown default: break
       }
     }
@@ -137,6 +144,7 @@ extension MultipeerSession: MCSessionDelegate {
       let msg = try? JSONDecoder().decode(MessageData.self, from: decompressed)
     else {
       print("❌ Could not decode MessageData")
+      errorSubject.send("Received malformed data from \(peerID.displayName)")
       return
     }
     DispatchQueue.main.async {
@@ -163,6 +171,7 @@ extension MultipeerSession: MCNearbyServiceAdvertiserDelegate {
 
   func advertiser(_:MCNearbyServiceAdvertiser, didNotStartAdvertisingPeer error: Error) {
     print("Advertiser error: \(error.localizedDescription)")
+    errorSubject.send("Advertiser error: \(error.localizedDescription)")
   }
 }
 
@@ -181,5 +190,6 @@ extension MultipeerSession: MCNearbyServiceBrowserDelegate {
 
   func browser(_:MCNearbyServiceBrowser, didNotStartBrowsingForPeers error: Error) {
     print("Browser error: \(error.localizedDescription)")
+    errorSubject.send("Browse error: \(error.localizedDescription)")
   }
 }

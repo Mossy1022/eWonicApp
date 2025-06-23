@@ -94,6 +94,14 @@ class TranslationViewModel: ObservableObject {
         // Add more languages supported by SFSpeechRecognizer & Apple Translate
     ]
 
+    private func messageWithNetworkSuggestion(base: String, error: Error) -> String {
+        var msg = base + ": " + error.localizedDescription
+        if (error as NSError).domain == NSURLErrorDomain {
+            msg += "\nPlease check your internet connection or try moving to an area with better signal."
+        }
+        return msg
+    }
+
     init() {
         checkAllPermissions()
         sttService.setupSpeechRecognizer(languageCode: myLanguage) // Initial setup
@@ -148,7 +156,7 @@ class TranslationViewModel: ObservableObject {
                     if error as? STTError == .noAudioInput {
                         self.myTranscribedText = "Didn't hear that. Try again."
                     }
-                    self.errorMessage = error.localizedDescription
+                    self.errorMessage = messageWithNetworkSuggestion(base: "STT failed", error: error)
                     self.showError = true
                 }
             }, receiveValue: { [weak self] finalText in
@@ -156,6 +164,14 @@ class TranslationViewModel: ObservableObject {
                 self.myTranscribedText = "You said: \(finalText)"
                 self.sendTextToPeer(originalText: finalText, isFinal: true)
             })
+            .store(in: &cancellables)
+
+        multipeerSession.errorSubject
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] msg in
+                self?.errorMessage = msg
+                self?.showError = true
+            }
             .store(in: &cancellables)
         
         ttsService.finishedSubject
@@ -282,7 +298,7 @@ class TranslationViewModel: ObservableObject {
           await MainActor.run {
             self.translatedTextForMeToHear = "Local translation unavailable."
             self.isProcessing = false
-            self.errorMessage = "Translation failed: \(error.localizedDescription)"
+            self.errorMessage = messageWithNetworkSuggestion(base: "Translation failed", error: error)
             self.showError = true
           }
         }
