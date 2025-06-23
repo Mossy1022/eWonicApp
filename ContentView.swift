@@ -67,8 +67,11 @@ struct ContentView: View {
                 viewModel.multipeerSession.disconnect() // Good practice
                 viewModel.sttService.stopTranscribing() // Stop STT if view disappears
             }
-            // Alert for errors (optional)
-            // .alert("Error", isPresented: $viewModel.showError, presenting: viewModel.errorMessage) { _ in Button("OK") {} } message: { Text($0) }
+            .alert("Error", isPresented: $viewModel.showError) {
+                Button("OK") { viewModel.showError = false }
+            } message: {
+                Text(viewModel.errorMessage)
+            }
         }
         .animation(.easeInOut, value: viewModel.multipeerSession.connectionState)
         .animation(.easeInOut, value: viewModel.hasAllPermissions)

@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 import Speech // For SFSpeechRecognizerAuthorizationStatus
+import MultipeerConnectivity
 
 class TranslationViewModel: ObservableObject {
     
@@ -66,6 +67,10 @@ class TranslationViewModel: ObservableObject {
     @Published var isProcessing: Bool = false // Generic processing flag for STT, Translation, TTS chain
     @Published var permissionStatusMessage: String = "Checking permissions..."
     @Published var hasAllPermissions: Bool = false
+    @Published var showError: Bool = false
+    @Published var errorMessage: String = ""
+
+    private var lastConnectionState: MCSessionState = .notConnected
 
     // Language Selection
     @Published var myLanguage: String = "en-US" {
@@ -110,6 +115,18 @@ class TranslationViewModel: ObservableObject {
             }
             .receive(on: DispatchQueue.main)
             .assign(to: &$connectionStatus)
+
+        multipeerSession.$connectionState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                guard let self = self else { return }
+                if state == .notConnected && self.lastConnectionState != .notConnected {
+                    self.errorMessage = "Connection to peer lost."
+                    self.showError = true
+                }
+                self.lastConnectionState = state
+            }
+            .store(in: &cancellables)
         
         // Handle STT results
         sttService.partialResultSubject
@@ -131,6 +148,8 @@ class TranslationViewModel: ObservableObject {
                     if error as? STTError == .noAudioInput {
                         self.myTranscribedText = "Didn't hear that. Try again."
                     }
+                    self.errorMessage = error.localizedDescription
+                    self.showError = true
                 }
             }, receiveValue: { [weak self] finalText in
                 guard let self = self else { return }
@@ -263,6 +282,8 @@ class TranslationViewModel: ObservableObject {
           await MainActor.run {
             self.translatedTextForMeToHear = "Local translation unavailable."
             self.isProcessing = false
+            self.errorMessage = "Translation failed: \(error.localizedDescription)"
+            self.showError = true
           }
         }
       }
